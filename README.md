@@ -2,9 +2,9 @@
 
 This repository contains code and data implementing the methods and experiments described in
 
-Afrabandpey, H., Spranger, M. "**Diverse and Feasible Counterfactual Explanations for Machine Learning Classifiers**." arXiv preprint arXiv:1910.09358 (2019)
+Afrabandpey, H., Spranger, M. "**Diverse and Feasible Counterfactual Explanations for Machine Learning Classifiers**." (2021)
 
-The paper is available in https://arxiv.org/abs/1910.09358v2. 
+The paper is available in unkown_link.com. 
 
 ## Overview
 
@@ -42,4 +42,4 @@ To reproduce results in Section V.D in the paper, run the Python script [main.py
  
  ## Reference
 
- * Afrabandpey, H., Spranger, M. "**Diverse and Feasible Counterfactual Explanations for Machine Learning Classifiers**." arXiv preprint arXiv:1910.09358 (2019) https://arxiv.org/abs/1910.09358v2
+ * Afrabandpey, H., Spranger, M. "**Diverse and Feasible Counterfactual Explanations for Machine Learning Classifiers**." arXiv preprint (arXiv address here)
