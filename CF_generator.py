@@ -64,7 +64,7 @@ def generate_cf(mdl, data, query_inst_all, glb_mat, pert_diff_metric, prx_weight
                         grads = torch.autograd.grad(loss, cfs, create_graph=True, retain_graph=True, only_inputs=True)
 
                         loss.backward()
-                        if causal_constraint == True:
+                        if causal_constraint:
                             for ftr_ind in np.arange(len(data.encoded_feature_names)+1, -1, -1):
                                 # backward loop since the last two features are +1 and -1 which affect other constraints
                                 if ftr_ind < len(data.encoded_feature_names):
@@ -294,16 +294,17 @@ def round_cfs(data, cfs):
     temp_cfs = []
     for index, tcf in enumerate(cfs):
         cf = tcf.detach().clone().numpy()
+        
         for i, v in enumerate(data.encoded_continuous_feature_indexes):
-            org_cont = (cf[v] * (data.maxx[0][i] - data.minx[0][i])) + data.minx[0][i]
+            org_cont = (cf[v] * (data.maxx[0][v] - data.minx[0][v])) + data.minx[0][v]  # continuous feature in orginal scale
             if data.data_df[data.encoded_feature_names[v]].dtype == "int64":
                 org_cont = round(org_cont)  # rounding off
             else:
                 org_cont = round(org_cont, 4)  # rounding off
 
-            normalized_cont = (org_cont - data.minx[0][i]) / (data.maxx[0][i] - data.minx[0][i])
-            cf[v] = normalized_cont  # assign the projected continuous value
-
+            normalized_cont = (org_cont - data.minx[0][v]) / (data.maxx[0][v] - data.minx[0][v])
+            cf[v] = normalized_cont
+        
         for v in data.encoded_categorical_feature_indexes:
             maxs = np.argwhere(cf[v[0]:v[-1]+1] == np.amax(cf[v[0]:v[-1]+1])).flatten().tolist()
             ix = maxs[0]
