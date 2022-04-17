@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.pylab as pylab
+from os.path import exists
 
 def binary_acc(y_pred, y_test):
     y_pred_tag = torch.round(torch.sigmoid(y_pred))
@@ -75,7 +76,7 @@ def load_dataset(dataset_path, dataset_id):
             else:
                 outcome.append(0)
         dataset['outcome'] = pd.Series(outcome)
-        dataset.drop(columns=['GrapeW'],axis=1,inplace=True)
+        dataset.drop(columns=['GrapeW'], axis=1, inplace=True)
 
         result = dataset.astype({"SproutN": np.float32, "BunchN": np.float32, "WoodW": np.float32, "SPAD06": np.float32,
                                  "NDVI06": np.float32, "SPAD08": np.float32, "NDVI08": np.float32, "Acid": np.float32,
@@ -239,7 +240,7 @@ class testData(Dataset):
     def __len__(self):
         return len(self.X_data)
 
-def proximity_plot(dataset_id, dataset_path, CFs_path):
+def proximity_plot(dataset_id, dataset_path, result_path):
     params = {'legend.fontsize': 'large',
               'figure.figsize': (5, 5),
               'axes.labelsize': 'large',
@@ -254,43 +255,45 @@ def proximity_plot(dataset_id, dataset_path, CFs_path):
     data = proc_data(data_params)
 
     original_queries = pd.read_csv('all_queries_dataset_' + dataset_id + '.csv', header=0)
-    distances_cat = np.zeros([5, 2, 9])
-    distances_cont = np.zeros([5, 2, 9])
+    distances_cat = np.zeros([5, 2, 10])
+    distances_cont = np.zeros([5, 2, 10])
     cfs_ind = 0
     for total_cfs in [2, 4, 6, 8, 10]:
         for causal_flag in [True, False]:
-            for query_instance in range(1, 10):
-                f = pd.read_csv(CFs_path + 'cfs_total_'+str(total_cfs) + '_query_instance_'+str(query_instance) +
-                                '_causal' + str(causal_flag) + '.csv', header=0)
-                d_cat = []
-                d_cont = []
-                for i in range(f.shape[0]):
-                    d_ij_cat = 0
-                    d_ij_cont = 0
+            for query_instance in range(1, 11):
+                csv_path = result_path + '\cfs_total_'+ str(total_cfs) + '_query_instance_'+ str(query_instance) \
+                           + '_causal' + str(causal_flag) + '.csv'
+                if exists(csv_path):
+                    f = pd.read_csv(csv_path, header=0)
+                    d_cat = []
+                    d_cont = []
+                    for i in range(f.shape[0]):
+                        d_ij_cat = 0
+                        d_ij_cont = 0
 
-                    if len(data.categorical_feature_names) != 0:
-                        for feature in data.categorical_feature_names:
-                            d_ij_cat += int(f.loc[i][feature] != original_queries.loc[query_instance-1][feature])
-                        d_ij_cat /= len(data.categorical_feature_names)
-                        d_ij_cat = -d_ij_cat
+                        if len(data.categorical_feature_names) != 0:
+                            for feature in data.categorical_feature_names:
+                                d_ij_cat += int(f.loc[i][feature] != original_queries.loc[query_instance-1][feature])
+                            d_ij_cat /= len(data.categorical_feature_names)
+                            d_ij_cat = -d_ij_cat
 
-                    for feature in data.continuous_feature_names:
-                        if np.median(abs(data.train_df[feature] - np.median(data.train_df[feature]))) == 0:
-                            d_ij_cont += abs(f.loc[i][feature] - original_queries.loc[query_instance-1][feature])
-                        else:
-                            d_ij_cont += abs(f.loc[i][feature] - original_queries.loc[query_instance-1][feature]) / np.median(
-                                abs(data.train_df[feature] - np.median(data.train_df[feature])))
-                    d_ij_cont /= len(data.continuous_feature_names)
-                    d_ij_cont = -d_ij_cont
+                        for feature in data.continuous_feature_names:
+                            if np.median(abs(data.train_df[feature] - np.median(data.train_df[feature]))) == 0:
+                                d_ij_cont += abs(f.loc[i][feature] - original_queries.loc[query_instance-1][feature])
+                            else:
+                                d_ij_cont += abs(f.loc[i][feature] - original_queries.loc[query_instance-1][feature]) / np.median(
+                                    abs(data.train_df[feature] - np.median(data.train_df[feature])))
+                        d_ij_cont /= len(data.continuous_feature_names)
+                        d_ij_cont = -d_ij_cont
 
-                    d_cat.append(d_ij_cat)
-                    d_cont.append(d_ij_cont)
-                if causal_flag == True:
-                    distances_cat[cfs_ind, 0, query_instance-1] = np.mean(d_cat)
-                    distances_cont[cfs_ind, 0, query_instance-1] = np.mean(d_cont)
-                else:
-                    distances_cat[cfs_ind, 1, query_instance-1] = np.mean(d_cat)
-                    distances_cont[cfs_ind, 1, query_instance-1] = np.mean(d_cont)
+                        d_cat.append(d_ij_cat)
+                        d_cont.append(d_ij_cont)
+                    if causal_flag:
+                        distances_cat[cfs_ind, 0, query_instance-1] = np.mean(d_cat)
+                        distances_cont[cfs_ind, 0, query_instance-1] = np.mean(d_cont)
+                    else:
+                        distances_cat[cfs_ind, 1, query_instance-1] = np.mean(d_cat)
+                        distances_cont[cfs_ind, 1, query_instance-1] = np.mean(d_cont)
         cfs_ind += 1
 
     mean_dists_cat = distances_cat.mean(axis=2)
@@ -300,7 +303,7 @@ def proximity_plot(dataset_id, dataset_path, CFs_path):
 
     legend_properties = {'weight':'bold'}
     if len(data.categorical_feature_names) != 0:
-        fig, ax = plt.subplots(figsize=(6, 6))
+        fig, ax = plt.subplots(figsize=(8, 8))
         ax.plot(mean_dists_cat[:, 0], color='blue', marker='o', label='C-DiCE')
         ax.plot(mean_dists_cat[:, 1], color='green', marker='s', label='DiCE')
         plt.ylim([-0.5, 0.5])
@@ -311,7 +314,7 @@ def proximity_plot(dataset_id, dataset_path, CFs_path):
         plt.legend(loc="lower right", prop=legend_properties)
         plt.show()
 
-    fig, ax = plt.subplots(figsize=(6, 6))
+    fig, ax = plt.subplots(figsize=(8, 8))
     ax.plot(mean_dists_cont[:, 0], color='blue', marker='o', label='C-DiCE')
     ax.plot(mean_dists_cont[:, 1], color='green', marker='s', label='DiCE')
     plt.ylim([np.floor(min(min(mean_dists_cont[:, 0]), min(mean_dists_cont[:, 1]))),

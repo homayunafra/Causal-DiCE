@@ -9,9 +9,11 @@ from torch.utils.data import DataLoader
 from torch import nn
 from torch import optim
 import models as mdl
+from os.path import dirname, join, abspath, exists
+from os import makedirs
 from sklearn.metrics import classification_report
+from joblib import Parallel, delayed
 import openpyxl
-from os.path import dirname, join, abspath
 
 @click.command()
 @click.option("--dataset_id",   default='adult',    help="Which dataset to use.",
@@ -31,6 +33,9 @@ def main(*args, **kwargs):
 def run(dataset_path, dataset_id, lr, n_epoch, batch_size, seed, test_size, save_model):
         
         dataset_path = join(dirname(abspath(__file__)), "Data") + dataset_path
+        result_path = join(dirname(abspath(__file__)), "Results\\") + dataset_id
+        if not exists(result_path):
+            makedirs(result_path)
         df = utils.load_dataset(dataset_path, dataset_id)
         n_features = df.shape[1] - 1
         data_params = {'dataframe': df, 'test_size': test_size, 'seed': seed}
@@ -89,7 +94,7 @@ def run(dataset_path, dataset_id, lr, n_epoch, batch_size, seed, test_size, save
 
         mdl_prediction = [y.squeeze().tolist() for y in mdl_prediction]
         print(classification_report(data.test_df.iloc[:, -1], mdl_prediction))
-        
+
         undesirable_indices = data.test_df.index[[ind for ind, val in enumerate(mdl_prediction) if val == 0]]
         undesirable_data = data.test_df.loc[undesirable_indices, :]
         undesirable_data = undesirable_data[undesirable_data.iloc[:, -1] == 0]
@@ -114,12 +119,13 @@ def run(dataset_path, dataset_id, lr, n_epoch, batch_size, seed, test_size, save
 
         # model global feasibility constraints #
         glb_mat = np.zeros((len(data.encoded_feature_names) + 2, len(data.encoded_feature_names)), dtype=int)
-        ''' 
+        '''
         gbl_mat is a (p+2)xp matrix containing all global feasibility constraints. In this matrix:
            1. The number of rows indexes the number of features including two hypothetical features U^+ and U^-,
            2. The number of columns equals the number of features.
         '''
-        usr_input = pd.read_excel("{}_global_feasibility.xlsx".format(dataset_id), header=None, engine='openpyxl')
+        glb_path = "./Data/" + dataset_id + "/{}_global_feasibility.xlsx".format(dataset_id)
+        usr_input = pd.read_excel(glb_path, header=None, engine='openpyxl')
         usr_input = usr_input.to_numpy()
 
         extnd_cols = []
@@ -146,12 +152,11 @@ def run(dataset_path, dataset_id, lr, n_epoch, batch_size, seed, test_size, save
                             glb_mat[len(data.encoded_feature_names)+1, j] = -1
 
         # generate counterfactuals #
-        cfg.generate_cf(bb_mdl, data, query_instance_all, glb_mat, pert_diff_metric=metric_matrix, prx_weight=1.,
-                        div_weight=1., cat_penalty=1., stp_threshold=0.5, lr=lr, min_iter=500, max_iter=10000,
-                        loss_cnvg_maxiter=1)
+        Parallel(n_jobs=4)(delayed(cfg.generate_cf)(bb_mdl, data, query_instance_all[ind], ind, glb_mat, result_path,
+                            pert_diff_metric=metric_matrix, prx_weight=1., div_weight=1., cat_penalty=1.,
+                            stp_threshold=0.5, lr=lr, min_iter=500, max_iter=50000, loss_cnvg_maxiter=1) for ind in range(len(query_instance_all)))
 
-        CFs_path = join(join(join(dirname(abspath(__file__)), "Results"), dataset_id), "CFs/")
-        utils.proximity_plot(dataset_id, dataset_path, )
+        utils.proximity_plot(dataset_id, dataset_path, result_path)
 
 
 if __name__ == "__main__":

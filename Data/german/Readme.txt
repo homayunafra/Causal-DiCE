@@ -58,7 +58,4 @@ Attribute 10: (numerical)
 		 1: Good
 
 
-It is worse to class a customer as good when they are bad (5), 
-than it is to class a customer as bad when they are good (1).
-
 

@@ -4,159 +4,165 @@ import numpy as np
 import timeit
 import copy
 
-def generate_cf(mdl, data, query_inst_all, glb_mat, pert_diff_metric, prx_weight, div_weight, cat_penalty,
-                stp_threshold, lr=0.01, min_iter=500, max_iter=5000, loss_cnvg_maxiter=1):
+def generate_cf(mdl, data, query_inst, instance_ind, glb_mat, result_path, pert_diff_metric, prx_weight, div_weight,
+                cat_penalty, stp_threshold, lr=0.01, min_iter=500, max_iter=5000, loss_cnvg_maxiter=1):
     """ Generates counterfactuals by graident-descent
     :param mdl: The black-box model.
-    :param data: the data class.
-    :param query_inst_all: A dictionary of feature names and values. Test point of interest.
-    :param total_CFs: Total number of counterfactuals required.
-    :param glb_mat: the causal constraint matrix.
+    :param data: The data class.
+    :param query_inst: A dictionary of feature names and values. Test point of interest.
+    :param instance_ind: The index of the test point of interest
+    :param glb_mat: The causal constraint matrix.
+    :param result_path: Path for saving results
     :param pert_diff_metric: Perturbation difficulty metric A that encodes user constraints on feature perturbation.
     :param prx_weight: A positive float. Larger this weight, more close the counterfactuals are to the query_instance.
     :param div_weight: A positive float. Larger this weight, more diverse the counterfactuals are.
     :param stp_threshold: Minimum threshold for counterfactuals target class probability.
-    :param cat_penalty: A positive float. A weight to ensure that all levels of a categorical variable sums to 1.
     :param lr: Learning rate for optimizer.
+    :param cat_penalty: A positive float. A weight to ensure that all levels of a categorical variable sums to 1.
     :param min_iter: Min iterations to run gradient descent for.
     :param max_iter: Max iterations to run gradient descent for.
     :param loss_cnvg_maxiter: Maximum number of iterations for loss_diff_thres to hold to declare convergence.
     """
-    instance = 1
-    for query_inst in query_inst_all:
-        test_pred = list(query_inst.items())[-1][1]
-        query_inst = prepare_query_inst(query_inst, data, encode=True)
-        query_inst = query_inst.iloc[0].values
-        query_inst_final = torch.FloatTensor(query_inst)
+    test_pred = list(query_inst.items())[-1][1]
+    query_inst = prepare_query_inst(query_inst, data, encode=True)
+    query_inst = query_inst.iloc[0].values
+    query_inst_final = torch.FloatTensor(query_inst)
 
-        desired_class = 1.0 - float(test_pred)
-        target_cf_class = torch.tensor(desired_class)
+    desired_class = 1.0 - float(test_pred)
+    target_cf_class = torch.tensor(desired_class)
 
-        for total_CFs in [2, 4, 6, 8, 10]:
+    for total_CFs in [2, 4, 6, 8, 10]:
+        for causal_constraint in [True, False]:
+            cf_generator(mdl, data, query_inst, instance_ind + 1, glb_mat, result_path, pert_diff_metric, prx_weight,
+                div_weight, cat_penalty, stp_threshold, test_pred, query_inst_final, target_cf_class, total_CFs,
+                causal_constraint, lr, min_iter, max_iter, loss_cnvg_maxiter)
 
-            for causal_constraint in [True, False]:
+def cf_generator(mdl, data, query_inst, instance_ind, glb_mat, result_path, pert_diff_metric, prx_weight, div_weight,
+                 cat_penalty, stp_threshold, test_pred, query_inst_final, target_cf_class, total_CFs, causal_constraint,
+                 lr, min_iter, max_iter, loss_cnvg_maxiter):
 
-                cfs = initialize_CFs(data, query_inst, total_CFs)
-                optimizer = torch.optim.Adam(cfs, lr=lr, betas=(0.0, 0.0))
+    cfs = initialize_CFs(data, query_inst, total_CFs)
+    optimizer = torch.optim.Adam(cfs, lr=lr, betas=(0.0, 0.0))
 
-                best_backup_cfs = []
-                best_backup_cfs_preds = []
-                iterations = 0
-                loss_diff = 1.0
-                prev_loss = 0.0
-                loss_diff_thres = 1e-5
-                loss_converge_iter = 0
-                start_time = timeit.default_timer()
-                elapsed = 0
-                while stop_loop(mdl, data, cfs, target_cf_class, iterations, min_iter, max_iter, loss_diff,
-                                loss_diff_thres, loss_converge_iter, loss_cnvg_maxiter, stp_threshold) is False:
+    best_backup_cfs = []
+    best_backup_cfs_preds = []
+    iterations = 0
+    loss_diff = 1.0
+    prev_loss = 0.0
+    loss_diff_thres = 1e-5
+    loss_converge_iter = 0
+    start_time = timeit.default_timer()
+    elapsed = 0
+    while stop_loop(mdl, data, cfs, target_cf_class, iterations, min_iter, max_iter, loss_diff,
+                    loss_diff_thres, loss_converge_iter, loss_cnvg_maxiter, stp_threshold) is False:
 
-                        # zero all existing gradients #
-                        optimizer.zero_grad()
-                        mdl.zero_grad()
+            # zero all existing gradients #
+            optimizer.zero_grad()
+            mdl.zero_grad()
 
-                        # get loss and backpropogate #
-                        loss = compute_loss(mdl, cfs, query_inst_final, pert_diff_metric, total_CFs, data.minx,
-                                            data.encoded_categorical_feature_indexes, target_cf_class, prx_weight,
-                                            div_weight, cat_penalty)
-                        loss_value = loss
+            # get loss and backpropogate #
+            loss = compute_loss(mdl, cfs, query_inst_final, pert_diff_metric, total_CFs, data.minx,
+                                data.encoded_categorical_feature_indexes, target_cf_class, prx_weight,
+                                div_weight, cat_penalty)
+            loss_value = loss
 
-                        grads = torch.autograd.grad(loss, cfs, create_graph=True, retain_graph=True, only_inputs=True)
+            grads = torch.autograd.grad(loss, cfs, create_graph=True, retain_graph=True, only_inputs=True)
 
-                        loss.backward()
-                        if causal_constraint:
-                            for ftr_ind in np.arange(len(data.encoded_feature_names)+1, -1, -1):
-                                # backward loop since the last two features are +1 and -1 which affect other constraints
-                                if ftr_ind < len(data.encoded_feature_names):
-                                    check = [(np.multiply(glb_mat[ftr_ind], np.sign(grads[ind].detach().numpy()))
-                                            - (np.multiply(glb_mat[ftr_ind],
-                                    (np.sign(grads[ind][ftr_ind].detach().numpy()) * np.ones(len(grads[ind]))))))
-                                            for ind in range(len(grads))]
-                                    for ind in range(total_CFs):
-                                        if all(check[ind] == 0) or \
-                                                (any(check[ind] == 1) and np.sign(grads[ind].data[ftr_ind]) == 0) or \
-                                                (any(check[ind] == -1) and np.sign(grads[ind].data[ftr_ind]) == 0):
-                                            pass
-                                        else:
-                                            cfs[ind].grad[ftr_ind] = 0.0
-                                else:
-                                    check = [np.multiply(glb_mat[ftr_ind], np.sign(grads[grd_ind].detach().numpy()))
-                                             for grd_ind in range(len(grads))]
-                                    for ind in range(total_CFs):
-                                        if ftr_ind == len(data.encoded_feature_names) and any(check[ind] < 0):
-                                            # check constraints related to U^+ feature #
-                                            indices = np.where(check[ind] < 0)
-                                            cfs[ind].grad[indices] = 0.0
-                                            grads[ind].data[indices] = 0.0
-                                        elif ftr_ind == (len(data.encoded_feature_names) - 1) and any(check[ind] > 0):
-                                            # constraints related to U^- feature #
-                                            indices = np.where(check[ind] > 0)
-                                            cfs[ind].grad[indices] = 0.0
-                                            grads[ind].data[indices] = 0.0
-                        end_time = timeit.default_timer()
-                        elapsed += end_time - start_time
-                        start_time = end_time
-                        # update the variables #
-                        optimizer.step()
+            loss.backward()
+            if causal_constraint:
+                for ftr_ind in np.arange(len(data.encoded_feature_names)+1, -1, -1):
+                    # backward loop since the last two features are +1 and -1 which affect other constraints
+                    if ftr_ind < len(data.encoded_feature_names):
+                        check = [(np.multiply(glb_mat[ftr_ind], np.sign(grads[ind].detach().numpy()))
+                                - (np.multiply(glb_mat[ftr_ind],
+                        (np.sign(grads[ind][ftr_ind].detach().numpy()) * np.ones(len(grads[ind]))))))
+                                for ind in range(len(grads))]
+                        for ind in range(total_CFs):
+                            if all(check[ind] == 0) or \
+                                    (any(check[ind] == 1) and np.sign(grads[ind].data[ftr_ind]) == 0) or \
+                                    (any(check[ind] == -1) and np.sign(grads[ind].data[ftr_ind]) == 0):
+                                pass
+                            else:
+                                cfs[ind].grad[ftr_ind] = 0.0
+                    else:
+                        check = [np.multiply(glb_mat[ftr_ind], np.sign(grads[grd_ind].detach().numpy()))
+                                 for grd_ind in range(len(grads))]
+                        for ind in range(total_CFs):
+                            if ftr_ind == len(data.encoded_feature_names) and any(check[ind] < 0):
+                                # check constraints related to U^+ feature #
+                                indices = np.where(check[ind] < 0)
+                                cfs[ind].grad[indices] = 0.0
+                                grads[ind].data[indices] = 0.0
+                            elif ftr_ind == (len(data.encoded_feature_names) - 1) and any(check[ind] > 0):
+                                # constraints related to U^- feature #
+                                indices = np.where(check[ind] > 0)
+                                cfs[ind].grad[indices] = 0.0
+                                grads[ind].data[indices] = 0.0
+            end_time = timeit.default_timer()
+            elapsed += end_time - start_time
+            start_time = end_time
+            # update the variables #
+            optimizer.step()
 
-                        # projection step #
-                        for ix in range(total_CFs):
-                            for jx in range(len(data.minx[0])):
-                                cfs[ix].data[jx] = torch.clamp(cfs[ix][jx], min=0, max=1)
+            # projection step #
+            for ix in range(total_CFs):
+                for jx in range(len(data.minx[0])):
+                    cfs[ix].data[jx] = torch.clamp(cfs[ix][jx], min=0, max=1)
 
-                        iterations += 1
-                        loss_diff = abs(loss_value - prev_loss)
-                        prev_loss = loss_value
+            iterations += 1
+            loss_diff = abs(loss_value - prev_loss)
+            prev_loss = loss_value
 
-                        # backing up CFs if they are valid
-                        temp_cfs_stored = round_cfs(data, cfs)
-                        mdl.eval()
-                        test_preds_stored = [torch.sigmoid(mdl(cf.unsqueeze(0))) for cf in temp_cfs_stored]
+            # backing up CFs if they are valid
+            temp_cfs_stored = round_cfs(data, cfs)
+            mdl.eval()
+            test_preds_stored = [torch.sigmoid(mdl(cf.unsqueeze(0))) for cf in temp_cfs_stored]
 
-                        if (bool(target_cf_class == 1 and any(i[0] >= stp_threshold for i in test_preds_stored))):
-                            for ind in range(len(temp_cfs_stored)):
-                                if bool(test_preds_stored[ind] >= stp_threshold):
-                                    if not any([(temp_cfs_stored[ind] == cf_).all() for cf_ in best_backup_cfs]):
-                                        best_backup_cfs.append(temp_cfs_stored[ind])
-                                        best_backup_cfs_preds.append(test_preds_stored[ind])
-                                        if len(best_backup_cfs) > total_CFs:
-                                            sorted_dists = np.argsort([best_backup_cfs_preds[i] - stp_threshold
-                                                                       for i in range(len(best_backup_cfs_preds))])
-                                            best_backup_cfs_preds = [best_backup_cfs_preds[i] for i in sorted_dists[:total_CFs]]
-                                            best_backup_cfs = [best_backup_cfs[i] for i in sorted_dists[:total_CFs]]
+            if (bool(target_cf_class == 1 and any(i[0] >= stp_threshold for i in test_preds_stored))):
+                for ind in range(len(temp_cfs_stored)):
+                    if bool(test_preds_stored[ind] >= stp_threshold):
+                        if not any([(temp_cfs_stored[ind] == cf_).all() for cf_ in best_backup_cfs]):
+                            best_backup_cfs.append(temp_cfs_stored[ind])
+                            best_backup_cfs_preds.append(test_preds_stored[ind])
+                            if len(best_backup_cfs) > total_CFs:
+                                sorted_dists = np.argsort([best_backup_cfs_preds[i] - stp_threshold
+                                                           for i in range(len(best_backup_cfs_preds))])
+                                best_backup_cfs_preds = [best_backup_cfs_preds[i] for i in sorted_dists[:total_CFs]]
+                                best_backup_cfs = [best_backup_cfs[i] for i in sorted_dists[:total_CFs]]
 
-                assert len(best_backup_cfs) != 0, "The list of counterfactuals is empty!"
-                m, s = divmod(elapsed, 60)
-                f = open("Time.txt", "a")
-                f.write("Query " + str(instance) + " k = " + str(total_CFs) + " causal constraint " +
-                        str(causal_constraint) + " = " + str(m) + " minutes and " + str(s) + " seconds.\n")
-                f.close()
+    if len(best_backup_cfs) != 0:
+        m, s = divmod(elapsed, 60)
+        f = open("Time.txt", "a")
+        f.write("Query " + str(instance_ind) + " k = " + str(total_CFs) + " causal constraint " +
+                str(causal_constraint) + " = " + str(m) + " minutes and " + str(s) + " seconds.\n")
+        f.close()
 
-                final_cfs = best_backup_cfs
-                final_cfs_preds = [torch.round(best_backup_cfs_preds[ix]) for ix in range(len(best_backup_cfs_preds))]
-                
-                if len(final_cfs) == total_CFs:
-                    total_CFs_found = total_CFs
-                    print('Diverse Counterfactuals found! total time taken: %02d' % m, 'min %02d' % s, 'sec')
-                else:
-                    total_CFs_found = 0
-                    for pred in final_cfs_preds:
-                        if ((target_cf_class == 0 and pred < stp_threshold) or (
-                                target_cf_class == 1 and pred > stp_threshold)):
-                            total_CFs_found += 1
+        final_cfs = best_backup_cfs
+        final_cfs_preds = [torch.round(best_backup_cfs_preds[ix]) for ix in range(len(best_backup_cfs_preds))]
 
-                    print('Only %d (required %d) Diverse Counterfactuals found for the given configuation, '
-                          'perhaps try with different values of proximity (or diversity) weights or learning rate...'
-                          % ( total_CFs_found, total_CFs), '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
+        if len(final_cfs) == total_CFs:
+            total_CFs_found = total_CFs
+            print('Diverse Counterfactuals found! total time taken: %02d' % m, 'min %02d' % s, 'sec')
+        else:
+            total_CFs_found = 0
+            for pred in final_cfs_preds:
+                if ((target_cf_class == 0 and pred < stp_threshold) or (
+                        target_cf_class == 1 and pred > stp_threshold)):
+                    total_CFs_found += 1
 
-                orig_inst, updated_cfs_list = convert_to_dataframe(query_inst, data, test_pred, final_cfs, final_cfs_preds)
-                updated_cfs_df = pd.DataFrame(updated_cfs_list)
-                updated_cfs_df.columns = orig_inst.columns
-                updated_cfs_df.to_csv('cfs_total_' + str(total_CFs) + '_query_instance_' + str(instance) + '_causal'
-                                      + str(causal_constraint) + '.csv', index=False)
+            print('Only %d (required %d) Diverse Counterfactuals found for the given configuation, '
+                  'perhaps try with different values of proximity (or diversity) weights or learning rate...'
+                  % ( total_CFs_found, total_CFs), '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
 
-                visualize_as_list(orig_inst, test_pred, updated_cfs_list)
-        instance += 1
+        orig_inst, updated_cfs_list = convert_to_dataframe(query_inst, data, test_pred, final_cfs, final_cfs_preds)
+        updated_cfs_df = pd.DataFrame(updated_cfs_list)
+        updated_cfs_df.columns = orig_inst.columns
+        updated_cfs_df.to_csv(result_path + '\cfs_total_' + str(total_CFs) + '_query_instance_' + str(instance_ind) +
+                              '_causal' + str(causal_constraint) + '.csv', index=False)
+
+        visualize_as_list(orig_inst, test_pred, updated_cfs_list)
+    else:
+        print("The list of counterfactuals for instance ", instance_ind, " is empty!")
 
 def prepare_query_inst(query_inst, data, encode):
     """Prepares user defined input for CF generator"""
